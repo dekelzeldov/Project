@@ -21,6 +21,8 @@ import pandas
 from imblearn.over_sampling import SMOTE
 import torch
 import numpy
+from sklearn.metrics import classification_report
+from sklearn.metrics import confusion_matrix
 
 # %%
 ### Data to pandas
@@ -51,7 +53,13 @@ testing_dataframe = pandas_from_file("SemEval2017-task4-test.subtask-A.english.t
 # sanity checks
 assert(training_merged.notna().values.all())
 assert(training_merged["label"].isin(label2id.keys()).all())
+
+print("TRAIN DATA:")
+print(training_merged["label"].value_counts())
 print(training_merged.sample(n=3))
+
+print("TEST DATA:")
+print(testing_dataframe["label"].value_counts())
 print(testing_dataframe.sample(n=3))
 
 
@@ -121,12 +129,16 @@ def compute_metrics(eval_pred):
     metrics = ["precision", "recall", "f1"]
     results = {m : load_metric(m).compute(predictions=predictions, references=labels, average="micro")[m] for m in metrics}
     results["accuracy"] = load_metric("accuracy").compute(predictions=predictions, references=labels)["accuracy"]
+    print("classification report:")
+    print(classification_report(labels, predictions))
+    print("confusion matrix:")
+    print(confusion_matrix(labels, predictions))
     return results
 
 # %%
 ### Model and Training
 
-negs = [pos_count, int(0.1*neg_count), total-int(0.1*neg_count), int(0.01*neg_count), total-int(0.01*neg_count) , 2*neg_count] # TODO add 0
+negs = [0, pos_count, int(0.1*neg_count), total-int(0.1*neg_count), int(0.01*neg_count), total-int(0.01*neg_count) , 2*neg_count]
 
 for n in negs:  
 
@@ -147,26 +159,48 @@ for n in negs:
          batched=True
         )
 
+    # print(tokenized_datasets)
+
     if (n != 0):
-        print(tokenized_datasets["train"])
-        print(tokenized_datasets["train"].to_pandas()["label"].value_counts())
+        # print(tokenized_datasets["train"])
 
         tokenized_train_panda = tokenized_datasets["train"].to_pandas()
+
+        # print("orig:")
+        # print(tokenized_train_panda["label"].value_counts())
+        # print(tokenized_train_panda.columns)
         # torched = torch.cat(tokenized_train_panda.drop(["label", "tweet"], axis=1))
         # print(torched)
 
-        smote = SMOTE(sampling_strategy={0: n, 1:neut_count, 2: total-n})
-        print(tokenized_train_panda.drop(["label", "tweet"], axis=1).applymap(len).value_counts())
-        print(tokenized_train_panda["label"].value_counts())
-        np = numpy.array(tokenized_train_panda.drop("tweet", axis=1))
-        print(numpy.array(np[:,0]))
-        print(numpy.array(np[:,1:3]))
-        smoted_train = smote.fit_resample(np[:,1:3].astype('object'), np[:,0].astype('int'))
-        tokenized_datasets = Dataset.from_pandas(smoted_train)
-        
-        print(tokenized_datasets["train"])
-        print(tokenized_datasets["train"]["label"].to_pandas().value_counts())
+        #sampling_strategy={0: n, 1:neut_count, 2: total-n}
+        tokenized_train_panda = pandas.concat([
+            tokenized_train_panda[tokenized_train_panda["label"] == 0].sample(n      , replace=(n>neg_count)),
+            tokenized_train_panda[tokenized_train_panda["label"] == 1].sample(neut_count),
+            tokenized_train_panda[tokenized_train_panda["label"] == 2].sample(total-n, replace=((total-n)>pos_count))
+        ])
+        # print("resampled:")
+        # print(tokenized_train_panda["label"].value_counts())
+        tokenized_datasets["train"] = Dataset.from_pandas(tokenized_train_panda, preserve_index=False)
 
+        # X = np.array([
+        #         tokenized_train_panda[col_name]
+        #         for col_name in tokenized_train_panda.drop(["label", "tweet"], axis=1).columns
+        #     ]).T
+        # Y = tokenized_train_panda["label"]
+
+        # smote = SMOTE() # sampling_strategy={0: n, 1:neut_count, 2: total-n})
+        # # print(tokenized_train_panda.drop(["label", "tweet"], axis=1).applymap(len).value_counts())
+        # # print(tokenized_train_panda["label"].value_counts())
+        # # np = numpy.array(tokenized_train_panda.drop("tweet", axis=1))
+        # # smoted_train = smote.fit_resample(np[:,1:3].astype('object'), np[:,0].astype('int'))
+        # smoted_train = smote.fit_resample(X,Y)
+        # tokenized_datasets = Dataset.from_pandas(smoted_train)
+        
+        # print(tokenized_datasets["train"])
+        # print(tokenized_datasets["train"]["label"].to_pandas().value_counts())
+
+    print("RATIO:")
+    print(tokenized_datasets["train"].to_pandas()["label"].value_counts())
     
 
     # data collector
@@ -178,12 +212,17 @@ for n in negs:
     # training args
     training_args = TrainingArguments(
     output_dir="finetuning",
-    per_device_train_batch_size=16,
-    per_device_eval_batch_size=16,
-    num_train_epochs=3,
+    per_device_train_batch_size=32,
+    per_device_eval_batch_size=32,
+    num_train_epochs=2,
     learning_rate=6e-6,
     evaluation_strategy="epoch"
     )
+
+
+    # print(tokenized_datasets)
+    # print(len(tokenized_datasets["train"].filter(lambda row: row['label']==0)))
+    # print(len(tokenized_datasets["train"].filter(lambda row: row['label']!=1)))
 
     # initialize trainer 
     trainer = Trainer(
@@ -198,7 +237,7 @@ for n in negs:
 
     ## Train and Eval
     trainer.train()
-    trainer.evaluate()
+    #trainer.evaluate()
 
 # %%
 
